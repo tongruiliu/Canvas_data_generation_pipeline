@@ -290,42 +290,6 @@ def _parse_tool_block(raw_tool: str) -> Tuple[Optional[Action], Optional[Dict[st
     return Action(name=parsed["name"], kwargs=parsed["args"]), parsed
 
 
-def _parse_registered_tool_call(message: Dict[str, Any]) -> Tuple[Optional[Action], Optional[Dict[str, Any]], str]:
-    tool_calls = message.get("tool_calls")
-    if not isinstance(tool_calls, list) or not tool_calls:
-        return None, None, ""
-
-    first = tool_calls[0]
-    if not isinstance(first, dict):
-        return None, None, ""
-
-    fn_obj = first.get("function")
-    if isinstance(fn_obj, dict):
-        name = fn_obj.get("name")
-        raw_args = fn_obj.get("arguments")
-    else:
-        name = first.get("name")
-        raw_args = first.get("arguments")
-
-    if not isinstance(name, str) or not name.strip():
-        return None, None, ""
-
-    args: Dict[str, Any] = {}
-    if isinstance(raw_args, dict):
-        args = raw_args
-    elif isinstance(raw_args, str):
-        try:
-            decoded = json.loads(raw_args)
-            if isinstance(decoded, dict):
-                args = decoded
-        except json.JSONDecodeError:
-            args = {}
-
-    parsed_tool = {"name": name.strip(), "args": args}
-    raw_tool_call = json.dumps({"name": parsed_tool["name"], "arguments": args}, ensure_ascii=False)
-    return Action(name=parsed_tool["name"], kwargs=args), parsed_tool, raw_tool_call
-
-
 def message_to_action(message: Dict[str, Any]) -> Tuple[Action, Dict[str, Any]]:
     content = _message_content_to_text(message.get("content")).strip()
     think = _extract_first_tag(content, THINK_RE)
@@ -335,15 +299,6 @@ def message_to_action(message: Dict[str, Any]) -> Tuple[Action, Dict[str, Any]]:
     answer = _extract_first_tag(content, ANSWER_RE)
 
     action, tool_obj = _parse_tool_block(raw_tool)
-    registered_raw_tool_call = ""
-    if action is None:
-        reg_action, reg_tool_obj, reg_raw_tool = _parse_registered_tool_call(message)
-        if reg_action is not None:
-            action = reg_action
-            tool_obj = reg_tool_obj
-            registered_raw_tool_call = reg_raw_tool
-            if not raw_tool_call:
-                raw_tool_call = reg_raw_tool
 
     if action is None:
         respond_text = answer if answer else content
@@ -355,7 +310,6 @@ def message_to_action(message: Dict[str, Any]) -> Tuple[Action, Dict[str, Any]]:
         "answer": answer,
         "raw_tool_call": raw_tool_call,
         "raw_tool": raw_tool,
-        "registered_raw_tool_call": registered_raw_tool_call,
     }
     return action, parsed
 
@@ -451,8 +405,6 @@ class ToolCallingAgent:
                     model=self.model,
                     custom_llm_provider=self.provider,
                     messages=model_messages,
-                    tools=self.tools_info,
-                    tool_choice="auto",
                     temperature=self.temperature,
                     **completion_kwargs,
                 )
@@ -461,14 +413,6 @@ class ToolCallingAgent:
 
                 action, parsed = message_to_action(next_message)
                 assistant_raw = _message_content_to_text(next_message.get("content") or "")
-                if parsed.get("registered_raw_tool_call") and not (TOOL_CALL_RE.search(assistant_raw) or TOOL_RE.search(assistant_raw)):
-                    reg_tool = str(parsed.get("registered_raw_tool_call", "")).strip()
-                    if reg_tool:
-                        think_text = str(parsed.get("think", "")).strip()
-                        if think_text:
-                            assistant_raw = f"<think>{think_text}</think>\n<tool_call>{reg_tool}</tool_call>"
-                        else:
-                            assistant_raw = f"<tool_call>{reg_tool}</tool_call>"
                 assistant_visible = strip_think_for_history(assistant_raw)
 
                 latest_format_error = _validate_nonfinal_format(parsed)
