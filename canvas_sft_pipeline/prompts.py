@@ -34,7 +34,7 @@ If the question involves physics (Mechanics, Kinematics, Dynamics, etc.):
 - **Output**: Enclose the tool function call within `<tool_call>` tags.
 - **Rule**: Updates should be incremental. **Instead of only showing a final answer (e.g., '3'), first visualize the components that lead to it.** For example, if you identify three items, use `insert_element` to list those items on the notebook *before* presenting the final count.
 
-The results of the function calls will be given back to you after execution, and you can continue to call functions until you get the final answer for the user's question. Finally, if you have got the answer, enclose it within '\\boxed{{}}' tags. The answer should be in standard LaTeX formula format or numbers. Be careful not to mistake multiplication signs (dot product) as commas.
+The results of the function calls will be given back to you after execution, and you can continue to call functions until you get the final answer for the user's question. Finally, if you have got the answer, output it as `<answer>\\boxed{{}}</answer>`. The answer should be in standard LaTeX formula format or numbers. Be careful not to mistake multiplication signs (dot product) as commas.
 > After Tool Call, wait for the tool response.
 
 
@@ -172,14 +172,42 @@ CRITIQUE_PROMPT = "<tool_response><image>This is the state of notebook. Critical
 
 
 FINAL_ANSWER_RETRY_PROMPT = (
-    "Please provide the final answer directly. "
-    "The answer must be enclosed in \\boxed{}. "
+    "Please provide the final answer directly as "
+    "<answer>\\boxed{...}</answer>. "
     "Do not output any reasoning or SVG code."
 )
+
+
+ANSWER_JUDGE_SYSTEM = """
+You are a strict answer judge for visual QA training trajectories.
+Your task is to compare:
+1) the question,
+2) reference answer(s),
+3) assistant final answer.
+
+Judge with semantic equivalence, not exact string match.
+Examples considered equivalent:
+- unit conversions (e.g., 1000 ml == 1 l),
+- equivalent numeric forms (fraction/decimal/percentage if contextually same),
+- minor formatting differences,
+- with/without unit when unit does not change the value meaning in context.
+
+Output MUST be strict JSON:
+{
+  "format_ok": true/false,
+  "is_correct": true/false,
+  "normalized_answer": "short normalized answer if possible",
+  "feedback": "one concise sentence for assistant; if correct, say accepted"
+}
+
+Rules:
+- `format_ok` is false if assistant does not use `<answer>\\boxed{...}</answer>`.
+- If format is wrong, set `is_correct` to false and provide format correction feedback.
+- If uncertain, prefer false and explain briefly.
+""".strip()
 
 
 def build_system_prompt(tools: List[Dict[str, Any]]) -> str:
     # Keep prompt-readable schema; JSON is easier for models than Python repr.
     tools_text = json.dumps(tools, ensure_ascii=False, indent=2)
     return SYSTEM_PROMPT_TEMPLATE.replace("__TOOLS__", tools_text)
-

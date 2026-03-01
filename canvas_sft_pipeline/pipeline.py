@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -15,6 +17,7 @@ from .blackboard_tools import blackboard_tools
 from .io_utils import TaskItem, equivalent_answer, path_to_data_url
 from .parser import parse_response
 from .prompts import (
+    ANSWER_JUDGE_SYSTEM,
     CRITIQUE_PROMPT,
     CRITIQUE_SYSTEM,
     CRITIQUE_SYSTEM_WO_IMG,
@@ -160,6 +163,117 @@ def _call_critic(
     return critique.strip()
 
 
+def _json_obj_from_text(text: str) -> Dict[str, Any]:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        pass
+    m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+    if not m:
+        return {}
+    try:
+        obj = json.loads(m.group(0))
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _to_bool(v: Any, default: bool = False) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in {"true", "1", "yes", "y"}:
+            return True
+        if s in {"false", "0", "no", "n"}:
+            return False
+    return default
+
+
+def _extract_answer_candidate(parsed: Dict[str, Any]) -> str:
+    boxed = str(parsed.get("boxed", "") or "").strip()
+    if boxed:
+        return boxed
+    answer = str(parsed.get("answer", "") or "").strip()
+    if answer:
+        return answer
+    return str(parsed.get("content", "") or "").strip()
+
+
+def _judge_answer_with_critic(
+    critic_cfg: Optional[ModelConfig],
+    task: TaskItem,
+    parsed: Dict[str, Any],
+    assistant_raw: str,
+    rendered_image_path: str,
+) -> Dict[str, Any]:
+    base_format_ok = bool(parsed.get("has_answer_tag")) and bool(str(parsed.get("boxed", "") or "").strip())
+    candidate = _extract_answer_candidate(parsed)
+
+    if critic_cfg is None:
+        is_correct = any(equivalent_answer(candidate, g) for g in task.answers) if task.answers else False
+        if not base_format_ok:
+            feedback = "Format error: please output exactly <answer>\\boxed{...}</answer>."
+        elif is_correct:
+            feedback = "Accepted."
+        else:
+            feedback = "Answer seems incorrect; please re-check and revise."
+        return {
+            "format_ok": base_format_ok,
+            "is_correct": bool(base_format_ok and is_correct),
+            "normalized_answer": candidate,
+            "feedback": feedback,
+            "judge_raw": "",
+        }
+
+    ref_answers_text = json.dumps(task.answers, ensure_ascii=False)
+    content: List[Dict[str, Any]] = [
+        {"type": "text", "text": f"Question:\n{task.question}"},
+        {"type": "text", "text": f"Reference answers:\n{ref_answers_text}"},
+        {"type": "text", "text": f"Assistant final output:\n{assistant_raw}"},
+    ]
+    if task.image_path:
+        content.append({"type": "image_url", "image_url": {"url": task.image_path}})
+    if rendered_image_path:
+        content.append({"type": "image_url", "image_url": {"url": rendered_image_path}})
+
+    judge_messages = [
+        {"role": "system", "content": [{"type": "text", "text": ANSWER_JUDGE_SYSTEM}]},
+        {"role": "user", "content": content},
+    ]
+    judge_raw, _ = _call_model(critic_cfg, judge_messages)
+    obj = _json_obj_from_text(judge_raw)
+
+    judge_format_ok = _to_bool(obj.get("format_ok"), default=base_format_ok)
+    format_ok = bool(base_format_ok and judge_format_ok)
+    is_correct = _to_bool(obj.get("is_correct"), default=False)
+    normalized = str(obj.get("normalized_answer", "") or "").strip() or candidate
+    feedback = str(obj.get("feedback", "") or "").strip()
+
+    if not format_ok:
+        is_correct = False
+        if not feedback:
+            feedback = "Format error: please output exactly <answer>\\boxed{...}</answer>."
+    elif not is_correct:
+        if not feedback:
+            feedback = "Your final answer is not equivalent to the reference answer; please re-think and revise."
+    else:
+        if not feedback:
+            feedback = "Accepted."
+
+    return {
+        "format_ok": format_ok,
+        "is_correct": is_correct,
+        "normalized_answer": normalized,
+        "feedback": feedback,
+        "judge_raw": judge_raw,
+    }
+
+
 def _build_base_fragment(image_ref: str) -> str:
     data_url = path_to_data_url(image_ref)
     if not data_url:
@@ -225,6 +339,23 @@ def _build_tool_feedback_message(rendered_path: str, tool_response: str) -> Dict
     if rendered_path:
         content.append({"type": "image_url", "image_url": {"url": rendered_path}})
     content.append({"type": "text", "text": f"<tool_response>{tool_response}</tool_response>"})
+    return {"role": "user", "content": content}
+
+
+def _build_answer_feedback_message(rendered_path: str, feedback: str) -> Dict[str, Any]:
+    content: List[Dict[str, Any]] = []
+    if rendered_path:
+        content.append({"type": "image_url", "image_url": {"url": rendered_path}})
+    content.append(
+        {
+            "type": "text",
+            "text": (
+                f"<answer_judge>{feedback}</answer_judge>\n"
+                "Please revise. Final response must be exactly in the format "
+                "<answer>\\boxed{...}</answer>."
+            ),
+        }
+    )
     return {"role": "user", "content": content}
 
 
@@ -295,6 +426,7 @@ def run_task(task: TaskItem, cfg: PipelineConfig) -> Dict[str, Any]:
         latest_render_for_turn = last_success_render
         critique = ""
         no_tool_calls = len(tool_calls) == 0
+        answer_judge: Dict[str, Any] = {}
 
         if not no_tool_calls:
             for i, tc in enumerate(tool_calls):
@@ -356,24 +488,39 @@ def run_task(task: TaskItem, cfg: PipelineConfig) -> Dict[str, Any]:
                     }
                 )
 
-        if parsed.get("boxed"):
-            final_answer = str(parsed.get("boxed", "")).strip()
-            if task.answers:
-                success = any(equivalent_answer(final_answer, g) for g in task.answers)
-            else:
+        answer_present = bool(parsed.get("has_answer_tag")) or bool(str(parsed.get("boxed", "")).strip())
+        if answer_present:
+            answer_judge = _judge_answer_with_critic(
+                cfg.critic,
+                task,
+                parsed,
+                raw,
+                latest_render_for_turn or last_success_render,
+            )
+            turn_item["answer_judge"] = answer_judge
+            if answer_judge.get("format_ok") and answer_judge.get("is_correct"):
+                final_answer = str(answer_judge.get("normalized_answer", "") or _extract_answer_candidate(parsed)).strip()
                 success = True
-            turn_item["tool_response"] = latest_tool_response
-            turn_item["rendered_image_path"] = latest_render_for_turn
-            turn_item["critic_feedback"] = critique
-            assistant_turns.append(turn_item)
-            break
+                turn_item["tool_response"] = latest_tool_response
+                turn_item["rendered_image_path"] = latest_render_for_turn
+                turn_item["critic_feedback"] = critique
+                assistant_turns.append(turn_item)
+                break
+            messages.append(
+                _build_answer_feedback_message(
+                    latest_render_for_turn or last_success_render,
+                    str(answer_judge.get("feedback", "") or "Answer rejected. Please revise."),
+                )
+            )
 
         turn_item["tool_response"] = latest_tool_response
         turn_item["rendered_image_path"] = latest_render_for_turn
         turn_item["critic_feedback"] = critique
+        if answer_judge:
+            turn_item["answer_judge"] = answer_judge
         assistant_turns.append(turn_item)
         if no_tool_calls:
-            break
+            messages.append({"role": "user", "content": [{"type": "text", "text": FINAL_ANSWER_RETRY_PROMPT}]})
 
     if not success and cfg.max_final_retries > 0:
         for _ in range(cfg.max_final_retries):
@@ -397,13 +544,24 @@ def run_task(task: TaskItem, cfg: PipelineConfig) -> Dict[str, Any]:
                     "critic_feedback": "",
                 }
             )
-            if parsed.get("boxed"):
-                final_answer = str(parsed.get("boxed", "")).strip()
-                if task.answers:
-                    success = any(equivalent_answer(final_answer, g) for g in task.answers)
-                else:
-                    success = True
+            answer_judge = _judge_answer_with_critic(
+                cfg.critic,
+                task,
+                parsed,
+                raw,
+                last_success_render,
+            )
+            assistant_turns[-1]["answer_judge"] = answer_judge
+            if answer_judge.get("format_ok") and answer_judge.get("is_correct"):
+                final_answer = str(answer_judge.get("normalized_answer", "") or _extract_answer_candidate(parsed)).strip()
+                success = True
                 break
+            messages.append(
+                _build_answer_feedback_message(
+                    last_success_render,
+                    str(answer_judge.get("feedback", "") or "Answer rejected. Please revise."),
+                )
+            )
 
     reward = 1.0 if success else 0.0
 
