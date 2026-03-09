@@ -64,20 +64,6 @@ def _usage_to_dict(usage: Any) -> Dict[str, int]:
     return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
 
 
-def _message_content_to_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        chunks: List[str] = []
-        for x in content:
-            if not isinstance(x, dict):
-                continue
-            if x.get("type") == "text":
-                chunks.append(str(x.get("text", "")))
-        return "\n".join(chunks).strip()
-    return str(content)
-
-
 def _materialize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for msg in messages:
@@ -610,26 +596,6 @@ def run_task(task: TaskItem, cfg: PipelineConfig) -> Dict[str, Any]:
 
     reward = 1.0 if success else 0.0
 
-    sft_records: List[Dict[str, Any]] = []
-    assistant_turn_idx = 0
-    for i, msg in enumerate(messages):
-        if msg.get("role") != "assistant":
-            continue
-        turn_meta = assistant_turns[assistant_turn_idx] if assistant_turn_idx < len(assistant_turns) else {}
-        prefix = messages[:i]
-        sft_records.append(
-            {
-                "task_id": task.task_id,
-                "pid": task.pid,
-                "reward": reward,
-                "messages": copy.deepcopy(prefix),
-                "assistant_target": copy.deepcopy(msg.get("content")),
-                "assistant_target_text": _message_content_to_text(msg.get("content")),
-                "turn_meta": turn_meta,
-            }
-        )
-        assistant_turn_idx += 1
-
     return {
         "task_id": task.task_id,
         "pid": task.pid,
@@ -642,7 +608,6 @@ def run_task(task: TaskItem, cfg: PipelineConfig) -> Dict[str, Any]:
         "render_dir": render_dir,
         "messages": messages,
         "turns": assistant_turns,
-        "sft_records": sft_records,
     }
 
 
@@ -676,7 +641,6 @@ def run_tasks(tasks: List[TaskItem], cfg: PipelineConfig) -> List[Dict[str, Any]
                 "error": str(exc),
                 "messages": [],
                 "turns": [],
-                "sft_records": [],
             }
             print(f"FAIL task_id={task.task_id} pid={task.pid} reward=0.0 error={str(exc).splitlines()[0][:240]}")
         result["elapsed_sec"] = round(time.time() - started, 3)

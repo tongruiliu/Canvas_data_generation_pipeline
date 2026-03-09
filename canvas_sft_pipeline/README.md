@@ -45,5 +45,4 @@ Notes:
 
 Outputs:
 - `canvas_sft_pipeline/results/canvas-sft-<tag>.json`
-- `canvas_sft_pipeline/results/canvas-sft-<tag>.sft.jsonl`
 - `canvas_sft_pipeline/results/renders/<session_id>/*.png`

@@ -119,17 +119,9 @@ def main() -> None:
     results = run_tasks(tasks, cfg)
 
     out_json = os.path.join(output_dir, f"canvas-sft-{run_tag}.json")
-    out_jsonl = os.path.join(output_dir, f"canvas-sft-{run_tag}.sft.jsonl")
 
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
-
-    total_records = 0
-    with open(out_jsonl, "w", encoding="utf-8") as f:
-        for r in results:
-            for rec in r.get("sft_records", []):
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                total_records += 1
 
     avg_reward = sum(float(x.get("reward", 0.0) or 0.0) for x in results) / max(len(results), 1)
     pass_cnt = sum(1 for x in results if float(x.get("reward", 0.0) or 0.0) >= 1.0)
@@ -137,7 +129,6 @@ def main() -> None:
     print("\n[Summary]")
     print(f"tasks={len(results)} pass={pass_cnt} avg_reward={avg_reward:.4f}")
     print(f"results_json={out_json}")
-    print(f"sft_jsonl={out_jsonl} records={total_records}")
 
     usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     for r in results:
