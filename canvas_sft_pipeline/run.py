@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import random
-from datetime import datetime
 from typing import Any, Dict, List
 
 from litellm import provider_list
@@ -21,7 +20,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--api-base-url", type=str, default="")
     p.add_argument("--policy-max-tokens", type=int, default=None)
     p.add_argument("--policy-timeout-sec", type=int, default=120)
-    p.add_argument("--temperature", type=float, default=0.0)
+    p.add_argument("--policy-temperature", type=float, default=1.0)
 
     p.add_argument("--critic-model", type=str, default=None)
     p.add_argument("--critic-model-provider", type=str, default=None)
@@ -29,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--critic-api-base-url", type=str, default="")
     p.add_argument("--critic-max-tokens", type=int, default=None)
     p.add_argument("--critic-timeout-sec", type=int, default=120)
+    p.add_argument("--critic-temperature", type=float, default=1.0)
     p.add_argument("--disable-critic", action="store_true")
 
     p.add_argument("--base-data-json", type=str, required=True)
@@ -80,7 +80,7 @@ def main() -> None:
     if args.shuffle:
         random.shuffle(tasks)
 
-    run_tag = args.run_tag or datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_tag = args.run_tag or f"start-{args.start}-end-{args.end}"
     output_dir = os.path.abspath(args.output_dir)
     os.makedirs(output_dir, exist_ok=True)
     render_root = os.path.join(output_dir, "renders")
@@ -91,7 +91,7 @@ def main() -> None:
         api_key=args.api_key,
         api_base_url=args.api_base_url,
         max_tokens=args.policy_max_tokens,
-        temperature=args.temperature,
+        temperature=args.policy_temperature,
         timeout_sec=args.policy_timeout_sec,
     )
 
@@ -103,7 +103,7 @@ def main() -> None:
             api_key=args.critic_api_key or args.api_key,
             api_base_url=args.critic_api_base_url or args.api_base_url,
             max_tokens=args.critic_max_tokens,
-            temperature=0.0,
+            temperature=args.critic_temperature,
             timeout_sec=args.critic_timeout_sec,
         )
 
@@ -112,6 +112,7 @@ def main() -> None:
         critic=critic,
         max_rounds=args.max_rounds,
         max_final_retries=args.max_final_retries,
+        run_tag=run_tag,
         render_root=render_root,
         output_dir=output_dir,
     )

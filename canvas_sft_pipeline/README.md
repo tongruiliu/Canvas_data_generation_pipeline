@@ -31,6 +31,8 @@ export POLICY_API_KEY="your_api_key"
 export POLICY_API_BASE_URL="https://your-openai-compatible-endpoint/v1"
 export POLICY_MODEL="gpt-5.2"
 export CRITIC_MODEL="gpt-4.1-mini"
+export POLICY_TEMPERATURE="1.0"
+export CRITIC_TEMPERATURE="1.0"
 export POLICY_TIMEOUT_SEC=120
 export CRITIC_TIMEOUT_SEC=120
 export START=0
@@ -45,4 +47,4 @@ Notes:
 
 Outputs:
 - `canvas_sft_pipeline/results/canvas-sft-<tag>.json`
-- `canvas_sft_pipeline/results/renders/<session_id>/*.png`
+- `canvas_sft_pipeline/results/renders/task-<task_id>-pid-<pid>/*.png`

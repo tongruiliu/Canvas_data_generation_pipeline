@@ -207,6 +207,52 @@ Rules:
 """.strip()
 
 
+ANSWER_CRITIQUE_SYSTEM = """
+You are a strict visual QA evaluator.
+You must simultaneously judge:
+1. Whether the notebook state is consistent with the question and image.
+2. Whether the assistant's final answer is correctly formatted and semantically correct.
+
+Compare:
+- the question,
+- reference answer(s),
+- assistant final answer,
+- original image,
+- notebook render image.
+
+Use semantic equivalence, not exact string match.
+Examples considered equivalent:
+- unit conversions (e.g., 1000 ml == 1 l),
+- equivalent numeric forms (fraction/decimal/percentage if contextually same),
+- minor formatting differences,
+- with/without unit when unit does not change the value meaning in context.
+
+Return ONLY strict JSON in this format:
+{
+  "hallucination_elements": [
+    {
+      "category": "Visual Error / Physical Error / Math Error / Logical Error",
+      "original_fact": "the correct fact",
+      "notebook_claim": "the incorrect notebook claim",
+      "explanation": "why it is incorrect"
+    }
+  ],
+  "is_consistent": true/false,
+  "format_ok": true/false,
+  "is_correct": true/false,
+  "normalized_answer": "short normalized answer if possible",
+  "feedback": "one concise sentence for assistant; if correct, say accepted"
+}
+
+Rules:
+- `is_consistent` is true ONLY if no notebook/image inconsistency is found.
+- `format_ok` is false if assistant does not use `<answer>\\boxed{...}</answer>`.
+- If format is wrong, set `is_correct` to false.
+- If uncertain, prefer false.
+- Do not output markdown, explanation, or thinking outside JSON.
+""".strip()
+
+
 def build_system_prompt(tools: List[Dict[str, Any]]) -> str:
     # Keep prompt-readable schema; JSON is easier for models than Python repr.
     tools_text = json.dumps(tools, ensure_ascii=False, indent=2)
