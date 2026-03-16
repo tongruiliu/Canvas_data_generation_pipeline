@@ -6,7 +6,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import litellm
 from litellm import completion
@@ -846,7 +846,11 @@ def run_task(task: TaskItem, cfg: PipelineConfig) -> Dict[str, Any]:
     }
 
 
-def run_tasks(tasks: List[TaskItem], cfg: PipelineConfig) -> List[Dict[str, Any]]:
+def run_tasks(
+    tasks: List[TaskItem],
+    cfg: PipelineConfig,
+    on_result: Optional[Callable[[List[Dict[str, Any]], Dict[str, Any]], None]] = None,
+) -> List[Dict[str, Any]]:
     os.makedirs(cfg.output_dir, exist_ok=True)
     os.makedirs(cfg.render_root, exist_ok=True)
 
@@ -881,4 +885,6 @@ def run_tasks(tasks: List[TaskItem], cfg: PipelineConfig) -> List[Dict[str, Any]
         result["elapsed_sec"] = round(time.time() - started, 3)
         result["order"] = idx
         results.append(result)
+        if on_result:
+            on_result(results, result)
     return results

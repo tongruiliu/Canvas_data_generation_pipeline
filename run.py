@@ -60,6 +60,14 @@ def _sum_usage(turns: List[Dict[str, Any]]) -> Dict[str, int]:
     return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
 
 
+def _write_results_snapshot(out_json: str, results: List[Dict[str, Any]]) -> None:
+    tmp_path = f"{out_json}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp_path, out_json)
+
+
 def main() -> None:
     args = parse_args()
     if args.end <= args.start:
@@ -117,12 +125,10 @@ def main() -> None:
         output_dir=output_dir,
     )
 
-    results = run_tasks(tasks, cfg)
-
     out_json = os.path.join(output_dir, f"canvas-sft-{run_tag}.json")
 
-    with open(out_json, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+    results = run_tasks(tasks, cfg, on_result=lambda results, _: _write_results_snapshot(out_json, results))
+    _write_results_snapshot(out_json, results)
 
     avg_reward = sum(float(x.get("reward", 0.0) or 0.0) for x in results) / max(len(results), 1)
     pass_cnt = sum(1 for x in results if float(x.get("reward", 0.0) or 0.0) >= 1.0)
